@@ -1,0 +1,39 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: loopforge
+      POSTGRES_USER: loopforge
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U loopforge -d loopforge"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  app:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      APP_ENV: dev
+      PORT: "8080"
+      DATABASE_URL: postgres://loopforge:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}@db:5432/loopforge
+      SSO_MODE: mock
+      SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET must be set in .env}
+      LOG_LEVEL: info
+      MOCK_SSO_PORT: "9090"
+      MOCK_SSO_HOST: 0.0.0.0
+      MOCK_SSO_ISSUER: http://localhost:9090
+    ports:
+      - "8080:8080"
+      - "9090:9090"
+    command: ["sh", "-c", "node dist/db/migrate-cli.js && node dist/db/seed-cli.js && node dist/server.js"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz >/dev/null || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
