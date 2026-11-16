@@ -13,6 +13,7 @@ import {
 } from './helpers/harness.js';
 import { createPool } from '../src/db/pool.js';
 import { createAppServices } from '../src/composition/container.js';
+import { SessionService } from '../src/domain/session-service.js';
 
 let environment: Awaited<ReturnType<typeof createIdentityEnvironment>>;
 let built: BuiltApp;
@@ -237,7 +238,7 @@ describe('health and authentication boundaries', () => {
     expect(disabledAccess.statusCode).toBe(401);
   });
 
-  it('applies the documented existing-user zero-role default by revoking stored roles', async () => {
+  it("applies P-06 option A by revoking an existing user's roles and invalidating old sessions", async () => {
     await execute(
       environment.database.url,
       `INSERT INTO app_user (user_id, employee_no, name, department, account_status, synced_at)
@@ -245,10 +246,28 @@ describe('health and authentication boundaries', () => {
     );
     await execute(environment.database.url, "INSERT INTO user_role (user_id, role) VALUES ('u-norole-001', 'EMPLOYEE')");
 
+    const oldSession = await new SessionService(built.config).issue('u-norole-001');
+    const oldSessionCookie = `${built.config.sessionCookieName}=${oldSession.token}`;
+    const beforeSync = await built.app.inject({
+      method: 'GET',
+      url: '/api/v1/auth/me',
+      headers: authHeader(oldSessionCookie),
+    });
+    expect(beforeSync.statusCode).toBe(200);
+
     const noRole = await performLogin(built, 'u-norole-001');
     expect(noRole.callback.statusCode).toBe(403);
     expect(json(noRole.callback).code).toBe('FORBIDDEN');
     expect(noRole.sessionCookiePair).toBe('');
+
+    const afterSync = await built.app.inject({
+      method: 'GET',
+      url: '/api/v1/auth/me',
+      headers: authHeader(oldSessionCookie),
+    });
+    expect(afterSync.statusCode).toBe(403);
+    expect(json(afterSync).code).toBe('FORBIDDEN');
+    expect(json(afterSync)).not.toHaveProperty('roles');
 
     const users = await tableRows<{ user_id: string; synced_at: Date; role_count: string }>(
       environment.database.url,

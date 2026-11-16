@@ -129,10 +129,12 @@ Mock IdP 仅在 `dev`/`test` 运行，与应用同进程、默认监听 `127.0.0
 | `u-admin-001` | `MENU_ADMIN` | 登录成功；管理探针 200；员工探针 403 |
 | `u-dual-001` | `EMPLOYEE` + `MENU_ADMIN` | 登录成功；两个探针均 200 |
 | `u-disabled-001` | `EMPLOYEE`，`DISABLED` | 回调 403，不建立会话 |
-| `u-norole-001` | 无已知角色 | 回调 403，不写数据库 |
+| `u-norole-001` | 无已知角色 | 回调 403，不建立会话；新主体不写数据库 |
 | `u-unknown-001` | `EMPLOYEE` + `SUPER_ADMIN` | 登录成功；仅持久化 `EMPLOYEE` |
 
 `u-emp-001`、`u-admin-001`、`u-dual-001`、`u-disabled-001` 由 `npm run seed:dev` 预置；其余两个按上表行为生成。Mock 非法 `login_hint` 返回 `422 VALIDATION_ERROR`，且不创建登录尝试。
+
+P-06 采用 A 方案：已有用户被 SSO 同步为零角色时，在同一事务内更新资料、清空旧角色并刷新 `synced_at`，随后返回 `403 FORBIDDEN` 且不建立新会话；该用户旧会话的下一次受保护请求也因零角色返回 `403`。新主体仍不写 `app_user`/`user_role`。
 
 ## 接口与权限
 

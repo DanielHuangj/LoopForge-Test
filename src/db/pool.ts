@@ -1,11 +1,22 @@
 import pg from 'pg';
 
-export function createPool(databaseUrl: string): pg.Pool {
-  return new pg.Pool({
+export interface PoolOptions {
+  onError?: (error: Error) => void;
+}
+
+export function createPool(databaseUrl: string, options: PoolOptions = {}): pg.Pool {
+  const pool = new pg.Pool({
     connectionString: databaseUrl,
     max: 10,
     application_name: 'loopforge-base-auth',
   });
+  // An idle client that loses its connection emits 'error' on the pool. Without a
+  // listener Node treats it as an uncaught exception and terminates the process, so
+  // the health check can never report the outage.
+  pool.on('error', (error: Error) => {
+    options.onError?.(error);
+  });
+  return pool;
 }
 
 export async function checkDatabase(pool: pg.Pool, timeoutMs: number): Promise<void> {

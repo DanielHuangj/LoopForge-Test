@@ -26,7 +26,15 @@ async function main(): Promise<void> {
 
   const redactor = createRedactor([config.databaseUrl, config.sso.clientSecret, config.sessionSecret]);
   const logger = createLogger(config.logLevel);
-  const pool = createPool(config.databaseUrl);
+  const pool = createPool(config.databaseUrl, {
+    onError: (error) => {
+      logger.warn({
+        event: 'database_pool_error',
+        errorType: error.name,
+        message: redactor.redact(error.message),
+      });
+    },
+  });
   let mockIdp: MockIdp | null = null;
   let app: Awaited<ReturnType<typeof buildApp>> | null = null;
 
