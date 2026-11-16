@@ -172,3 +172,32 @@ function authService(userOrFactory: UserRecord | (() => UserRecord)): AuthServic
   } as unknown as SessionService;
   return new AuthService(config, users, attempts, sso, sessions);
 }
+
+describe('login start failure handling', () => {
+  it('does not persist a login attempt when the authorization URL cannot be built', async () => {
+    let created = 0;
+    const attempts: LoginAttemptStore = {
+      async create() {
+        created += 1;
+      },
+      async removeExpired() {},
+      async consume() {
+        return null;
+      },
+    };
+    const users = {} as unknown as IdentityStore;
+    const sso: SsoProvider = {
+      async authorizationUrl() {
+        throw new AppError('LOGIN_FAILED');
+      },
+      async exchangeCode() {
+        return {};
+      },
+    };
+    const sessions = {} as unknown as SessionService;
+    const auth = new AuthService(config, users, attempts, sso, sessions);
+
+    await expect(auth.startLogin()).rejects.toMatchObject({ code: 'LOGIN_FAILED', status: 401 });
+    expect(created).toBe(0);
+  });
+});

@@ -81,6 +81,9 @@ export async function runSeed(databaseUrl: string, appEnv: string): Promise<void
         );
         const currentRoles = new Set(roleRows.rows.map((row) => row.role));
         const targetRoles = new Set(identity.roles);
+        const rolesToDelete = [...currentRoles].filter((role) => !targetRoles.has(role));
+        const rolesToInsert = [...targetRoles].filter((role) => !currentRoles.has(role));
+        const rolesChanged = rolesToDelete.length > 0 || rolesToInsert.length > 0;
 
         if (existing.rows.length === 0) {
           await client.query(
@@ -94,7 +97,8 @@ export async function runSeed(databaseUrl: string, appEnv: string): Promise<void
             current.employee_no !== identity.employeeNo ||
             current.name !== identity.name ||
             current.department !== identity.department ||
-            current.account_status !== identity.accountStatus;
+            current.account_status !== identity.accountStatus ||
+            rolesChanged;
           if (changed) {
             await client.query(
               `UPDATE app_user
@@ -109,8 +113,6 @@ export async function runSeed(databaseUrl: string, appEnv: string): Promise<void
           }
         }
 
-        const rolesToDelete = [...currentRoles].filter((role) => !targetRoles.has(role));
-        const rolesToInsert = [...targetRoles].filter((role) => !currentRoles.has(role));
         if (rolesToDelete.length > 0) {
           await client.query('DELETE FROM user_role WHERE user_id = $1 AND role = ANY($2::varchar[])', [
             identity.userId,

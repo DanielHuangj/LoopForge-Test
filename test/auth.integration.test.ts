@@ -395,7 +395,10 @@ describe('health and authentication boundaries', () => {
 
     const login = await performLogin(built, 'u-emp-001');
     const token = login.sessionCookiePair.split('=')[1] ?? '';
-    const tampered = `${token.slice(0, -1)}${token.endsWith('a') ? 'b' : 'a'}`;
+    const [tokenHeader, tokenPayload, tokenSignature] = token.split('.');
+    const signatureBytes = Buffer.from(tokenSignature ?? '', 'base64url');
+    signatureBytes[0] = signatureBytes[0]! ^ 0x01;
+    const tampered = `${tokenHeader}.${tokenPayload}.${signatureBytes.toString('base64url')}`;
     const tamperedResponse = await built.app.inject({
       method: 'GET',
       url: '/api/v1/auth/me',

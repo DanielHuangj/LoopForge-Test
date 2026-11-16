@@ -125,3 +125,44 @@ describe('OIDC ID token verification', () => {
     }
   });
 });
+
+describe('OIDC discovery validation', () => {
+  let idp: FastifyInstance;
+  let issuer: string;
+
+  beforeAll(async () => {
+    const port = await getFreePort();
+    issuer = `http://127.0.0.1:${port}`;
+    idp = Fastify({ logger: false });
+    idp.get('/.well-known/openid-configuration', async () => ({
+      issuer,
+      authorization_endpoint: 'not-a-valid-url',
+      token_endpoint: `${issuer}/token`,
+      jwks_uri: `${issuer}/jwks`,
+    }));
+    await idp.listen({ port, host: '127.0.0.1' });
+  });
+
+  afterAll(async () => {
+    await idp?.close();
+  });
+
+  it('rejects a malformed authorization_endpoint with LOGIN_FAILED instead of throwing TypeError', async () => {
+    const config = loadConfig({
+      APP_ENV: 'test',
+      DATABASE_URL: 'postgres://user:pass@127.0.0.1:1/unused',
+      SSO_MODE: 'oidc',
+      SSO_ISSUER: issuer,
+      SSO_CLIENT_ID: 'loopforge-oidc-test',
+      SSO_CLIENT_SECRET: 'oidc-client-secret',
+      SSO_REDIRECT_URI: 'http://127.0.0.1:8080/api/v1/auth/callback',
+      SESSION_SECRET: 'test-session-secret-0123456789abcdef0123456789abcdef',
+    } as NodeJS.ProcessEnv);
+    const client = new OidcClient(config);
+
+    await expect(client.authorizationUrl({ state: 'state', nonce: 'nonce' })).rejects.toMatchObject({
+      code: 'LOGIN_FAILED',
+      status: 401,
+    });
+  });
+});

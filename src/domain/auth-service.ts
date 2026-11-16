@@ -48,8 +48,8 @@ export class AuthService {
     await this.attempts.removeExpired();
     const state = randomToken();
     const nonce = randomToken();
-    await this.attempts.create(sha256Hex(state), sha256Hex(nonce));
     const authorizationUrl = await this.oidc.authorizationUrl({ state, nonce, loginHint });
+    await this.attempts.create(sha256Hex(state), sha256Hex(nonce));
     return { state, nonce, authorizationUrl };
   }
 

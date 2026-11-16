@@ -291,4 +291,33 @@ describe('migrations and seed idempotency', () => {
       await failingDatabase.close();
     }
   });
+
+  it('refreshes synced_at when only the role set changes', async () => {
+    await runMigrations(database.url);
+    await runSeed(database.url, 'test');
+    await execute(
+      database.url,
+      "DELETE FROM user_role WHERE user_id = 'u-dual-001' AND role = 'MENU_ADMIN'",
+    );
+    await execute(
+      database.url,
+      "UPDATE app_user SET synced_at = '2000-01-01T00:00:00Z' WHERE user_id = 'u-dual-001'",
+    );
+
+    await runSeed(database.url, 'test');
+
+    const rows = await tableRows<{ synced_at: string; roles: string }>(
+      database.url,
+      `SELECT u.synced_at::text AS synced_at,
+              coalesce(string_agg(r.role, ',' ORDER BY r.role), '') AS roles
+         FROM app_user u LEFT JOIN user_role r ON r.user_id = u.user_id
+        WHERE u.user_id = 'u-dual-001'
+        GROUP BY u.user_id`,
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.roles).toBe('EMPLOYEE,MENU_ADMIN');
+    expect(new Date(rows[0]!.synced_at).getTime()).toBeGreaterThan(
+      new Date('2000-01-02T00:00:00Z').getTime(),
+    );
+  });
 });
