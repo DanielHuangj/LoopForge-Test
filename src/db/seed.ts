@@ -63,22 +63,66 @@ export async function runSeed(databaseUrl: string, appEnv: string): Promise<void
           accountStatus: seed.accountStatus,
           roles: [...seed.roles],
         };
-        await client.query(
-          `INSERT INTO app_user (user_id, employee_no, name, department, account_status, synced_at)
-           VALUES ($1, $2, $3, $4, $5, clock_timestamp())
-           ON CONFLICT (user_id) DO UPDATE
-             SET employee_no = EXCLUDED.employee_no,
-                 name = EXCLUDED.name,
-                 department = EXCLUDED.department,
-                 account_status = EXCLUDED.account_status,
-                 synced_at = clock_timestamp()`,
-          [identity.userId, identity.employeeNo, identity.name, identity.department, identity.accountStatus],
+        const existing = await client.query<{
+          employee_no: string | null;
+          name: string;
+          department: string | null;
+          account_status: AccountStatus;
+        }>(
+          `SELECT employee_no, name, department, account_status
+             FROM app_user
+            WHERE user_id = $1
+            FOR UPDATE`,
+          [identity.userId],
         );
-        await client.query('DELETE FROM user_role WHERE user_id = $1', [identity.userId]);
-        await client.query('INSERT INTO user_role (user_id, role) SELECT $1, unnest($2::varchar[])', [
-          identity.userId,
-          identity.roles,
-        ]);
+        const roleRows = await client.query<{ role: Role }>(
+          'SELECT role FROM user_role WHERE user_id = $1 ORDER BY role',
+          [identity.userId],
+        );
+        const currentRoles = new Set(roleRows.rows.map((row) => row.role));
+        const targetRoles = new Set(identity.roles);
+
+        if (existing.rows.length === 0) {
+          await client.query(
+            `INSERT INTO app_user (user_id, employee_no, name, department, account_status, synced_at)
+             VALUES ($1, $2, $3, $4, $5, clock_timestamp())`,
+            [identity.userId, identity.employeeNo, identity.name, identity.department, identity.accountStatus],
+          );
+        } else {
+          const current = existing.rows[0]!;
+          const changed =
+            current.employee_no !== identity.employeeNo ||
+            current.name !== identity.name ||
+            current.department !== identity.department ||
+            current.account_status !== identity.accountStatus;
+          if (changed) {
+            await client.query(
+              `UPDATE app_user
+                  SET employee_no = $2,
+                      name = $3,
+                      department = $4,
+                      account_status = $5,
+                      synced_at = clock_timestamp()
+                WHERE user_id = $1`,
+              [identity.userId, identity.employeeNo, identity.name, identity.department, identity.accountStatus],
+            );
+          }
+        }
+
+        const rolesToDelete = [...currentRoles].filter((role) => !targetRoles.has(role));
+        const rolesToInsert = [...targetRoles].filter((role) => !currentRoles.has(role));
+        if (rolesToDelete.length > 0) {
+          await client.query('DELETE FROM user_role WHERE user_id = $1 AND role = ANY($2::varchar[])', [
+            identity.userId,
+            rolesToDelete,
+          ]);
+        }
+        if (rolesToInsert.length > 0) {
+          await client.query('INSERT INTO user_role (user_id, role) SELECT $1, unnest($2::varchar[])', [
+            identity.userId,
+            rolesToInsert,
+          ]);
+        }
       }
     });
   } finally {

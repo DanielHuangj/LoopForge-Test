@@ -78,7 +78,7 @@ describe('configuration', () => {
       SSO_CLIENT_SECRET: 'secret',
       SSO_REDIRECT_URI: 'https://app.example.com/api/v1/auth/callback',
       SESSION_SECRET: '0123456789abcdef0123456789abcdef',
-      POST_LOGIN_REDIRECT_URL: 'https://app.example.com/after-login',
+      POST_LOGIN_REDIRECT_URL: '/after-login',
     } as NodeJS.ProcessEnv);
 
     expect(new SessionService(devConfig).sessionCookieOptions(100).secure).toBe(false);
@@ -105,6 +105,37 @@ describe('configuration', () => {
       'static-secret',
     ]) {
       expect(redacted).not.toContain(secret);
+    }
+  });
+
+  it('only accepts an internal single-slash post-login redirect path', () => {
+    expect(loadConfig({ ...baseEnv, POST_LOGIN_REDIRECT_URL: '/after-login?from=sso' }).postLoginRedirectUrl).toBe(
+      '/after-login?from=sso',
+    );
+
+    for (const redirect of [
+      'https://evil.example/after-login',
+      '//evil.example/after-login',
+      '/\\evil.example/after-login',
+      '/after-login#fragment',
+      '/after-login\ninjected',
+      '/after-login\n',
+      `/${'x'.repeat(2048)}`,
+    ]) {
+      expect(() => loadConfig({ ...baseEnv, POST_LOGIN_REDIRECT_URL: redirect })).toThrow(ConfigError);
+    }
+  });
+
+  it('requires the five identity claim names to be pairwise distinct', () => {
+    expect(() => loadConfig({ ...baseEnv, SSO_ROLES_CLAIM: 'name' })).toThrow(ConfigError);
+    try {
+      loadConfig({ ...baseEnv, SSO_ROLES_CLAIM: 'name' });
+      throw new Error('expected ConfigError');
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigError);
+      expect((error as ConfigError).variableNames).toEqual(
+        expect.arrayContaining(['SSO_NAME_CLAIM', 'SSO_ROLES_CLAIM']),
+      );
     }
   });
 });

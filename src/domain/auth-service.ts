@@ -69,9 +69,10 @@ export class AuthService {
   }
 
   async completeCallback(input: {
-    code: string;
+    code?: string;
     state: string;
     stateCookie: string | undefined;
+    oidcError?: string;
   }): Promise<LoginCompletion> {
     const cookieState = this.sessions.verifyStateCookie(input.stateCookie);
     if (!cookieState || cookieState !== input.state) {
@@ -80,6 +81,12 @@ export class AuthService {
 
     const nonceHash = await this.attempts.consume(sha256Hex(input.state));
     if (!nonceHash) throw new AppError('LOGIN_FAILED');
+
+    if (input.oidcError !== undefined) {
+      const oidcErrorCode = /^[A-Za-z0-9_.-]{1,64}$/.test(input.oidcError) ? input.oidcError : 'unknown';
+      throw new AppError('LOGIN_FAILED', { oidcErrorCode });
+    }
+    if (!input.code) throw new AppError('LOGIN_FAILED');
 
     const claims = await this.oidc.exchangeCode(input.code, nonceHash, sha256Hex);
     const identity = normalizeIdentity(claims, this.config);

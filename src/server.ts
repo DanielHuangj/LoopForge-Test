@@ -27,6 +27,9 @@ async function main(): Promise<void> {
   const redactor = createRedactor([config.databaseUrl, config.sso.clientSecret, config.sessionSecret]);
   const logger = createLogger(config.logLevel);
   const pool = createPool(config.databaseUrl, {
+    connectionTimeoutMillis: config.healthDbTimeoutMs,
+    statementTimeoutMs: config.healthDbTimeoutMs,
+    queryTimeoutMs: config.healthDbTimeoutMs,
     onError: (error) => {
       logger.warn({
         event: 'database_pool_error',

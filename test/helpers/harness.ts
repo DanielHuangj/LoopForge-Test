@@ -116,7 +116,11 @@ export async function buildTestApp(input: {
 
   const logs = new MemoryLogStream();
   const logger = createLogger('info', logs);
-  const pool = createPool(input.databaseUrlOverride ?? input.databaseUrl);
+  const pool = createPool(input.databaseUrlOverride ?? input.databaseUrl, {
+    connectionTimeoutMillis: config.healthDbTimeoutMs,
+    statementTimeoutMs: config.healthDbTimeoutMs,
+    queryTimeoutMs: config.healthDbTimeoutMs,
+  });
   const redactor = createRedactor([config.databaseUrl, config.sso.clientSecret, config.sessionSecret]);
   const services = createAppServices({ config, pool });
   const app = await buildApp({ config, ...services, logger, redactor });

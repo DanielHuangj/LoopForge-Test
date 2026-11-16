@@ -327,6 +327,64 @@ describe('health and authentication boundaries', () => {
     expect(expired.statusCode).toBe(401);
   });
 
+  it('consumes state for OIDC authorization errors without creating a session', async () => {
+    const login = await built.app.inject({
+      method: 'GET',
+      url: '/api/v1/auth/login?login_hint=u-emp-001',
+    });
+    const stateCookie = cookiePair(login, 'loopforge_login_state');
+    expect(stateCookie).toBeDefined();
+    const state = stateCookie!.slice('loopforge_login_state='.length).split('.', 1)[0]!;
+
+    const callback = await built.app.inject({
+      method: 'GET',
+      url: `/api/v1/auth/callback?error=access_denied&state=${encodeURIComponent(state)}`,
+      headers: { cookie: stateCookie! },
+    });
+    expect(callback.statusCode).toBe(401);
+    expect(json(callback).code).toBe('LOGIN_FAILED');
+    expect(findSetCookie(callback, 'loopforge_session')).toBeUndefined();
+    const errorLog = built.logs
+      .entries()
+      .find((entry) => entry.event === 'http_error' && entry.traceId === callback.headers['x-trace-id']);
+    expect(errorLog).toMatchObject({ errorCode: 'LOGIN_FAILED', oidcErrorCode: 'access_denied' });
+
+    const attempts = await tableRows<{ count: string }>(
+      environment.database.url,
+      'SELECT count(*)::text AS count FROM login_attempt',
+    );
+    expect(attempts).toEqual([{ count: '0' }]);
+
+    const replay = await built.app.inject({
+      method: 'GET',
+      url: `/api/v1/auth/callback?code=fake-code&state=${encodeURIComponent(state)}`,
+      headers: { cookie: stateCookie! },
+    });
+    expect(replay.statusCode).toBe(401);
+    expect(json(replay).code).toBe('LOGIN_FAILED');
+
+    const oversizedLogin = await built.app.inject({
+      method: 'GET',
+      url: '/api/v1/auth/login?login_hint=u-emp-001',
+    });
+    const oversizedStateCookie = cookiePair(oversizedLogin, 'loopforge_login_state')!;
+    const oversizedState = oversizedStateCookie.slice('loopforge_login_state='.length).split('.', 1)[0]!;
+    const oversized = await built.app.inject({
+      method: 'GET',
+      url: `/api/v1/auth/callback?error=invalid_scope&state=${encodeURIComponent(oversizedState)}&error_description=${'x'.repeat(2049)}`,
+      headers: { cookie: oversizedStateCookie },
+    });
+    expect(oversized.statusCode).toBe(422);
+    expect(json(oversized).details).toEqual(
+      expect.arrayContaining([expect.objectContaining({ field: 'error_description' })]),
+    );
+    const retainedAttempts = await tableRows<{ count: string }>(
+      environment.database.url,
+      'SELECT count(*)::text AS count FROM login_attempt',
+    );
+    expect(retainedAttempts).toEqual([{ count: '1' }]);
+  });
+
   it('rejects expired, tampered, random, and disabled-account sessions', async () => {
     const random = await built.app.inject({
       method: 'GET',

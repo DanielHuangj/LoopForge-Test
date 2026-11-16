@@ -37,6 +37,9 @@ export function registerErrorHandler(app: FastifyInstance, logger: Logger, redac
       errorCode: appError.code,
       errorType,
       message: appError.status >= 500 ? safeMessage : appError.message,
+      ...(appError.oidcErrorCode
+        ? { oidcErrorCode: redactor.redact(appError.oidcErrorCode) }
+        : {}),
     };
 
     if (appError.status >= 500) {

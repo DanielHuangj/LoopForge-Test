@@ -97,7 +97,7 @@ docker compose up --build
 | `SESSION_SECRET` | 是 | 无 | UTF-8 至少 32 字节，禁止输出 |
 | `SESSION_TTL_SECONDS` | 否 | `28800` | 1–28800 秒 |
 | `SESSION_COOKIE_NAME` | 否 | `loopforge_session` | `^[A-Za-z0-9_-]{1,64}$` |
-| `POST_LOGIN_REDIRECT_URL` | 否 | `/api/v1/auth/me` | 站内路径或受信任绝对 URL |
+| `POST_LOGIN_REDIRECT_URL` | 否 | `/api/v1/auth/me` | 仅站内绝对路径（单个 `/` 开头）；拒绝绝对 URL、`//`、反斜杠、fragment 与控制字符 |
 | `LOG_LEVEL` | 否 | `info` | `error`、`warn`、`info`、`debug`；生产禁止 `debug` |
 | `HEALTH_DB_TIMEOUT_MS` | 否 | `2000` | 1–10000 ms |
 | `MOCK_SSO_PORT` | 否 | `9090` | 仅 mock 生效 |
@@ -160,10 +160,10 @@ npm run migrate
 npm run seed:dev
 ```
 
-- 迁移按文件名排序，在 PostgreSQL advisory lock 下逐版本执行；已应用版本跳过，支持空库/已有库重复执行。
+- 迁移文件必须使用三位数字版本前缀；迁移器按数值前缀排序，在 PostgreSQL advisory lock 下逐版本执行；非法或重复前缀会拒绝执行，已应用版本跳过，支持空库/已有库重复执行。
 - `001_identity.sql` 创建 `app_user`、`user_role`；`002_login_attempt.sql` 创建一次性登录尝试表。
 - 迁移不创建任何菜品、菜单、订单或图片业务表，也不修改已有用户数据。
-- `seed:dev` 只允许 `APP_ENV=dev` 或 `test`，单事务 upsert 四个固定账号并整体替换角色集合；重复执行不产生重复行；生产直接拒绝。
+- `seed:dev` 只允许 `APP_ENV=dev` 或 `test`，单事务比对四个固定账号与角色集合，仅写入差异；重复执行不产生重复行、不会刷新未变化账号的 `synced_at`；生产直接拒绝。
 - 应用启动不会自动迁移。生产发布必须先执行迁移，再启动应用。
 
 ## 自动化测试
@@ -172,7 +172,7 @@ npm run seed:dev
 npm test
 ```
 
-测试覆盖：空库/已有库迁移重复执行、种子幂等、数据库约束、四种登录主体与双角色、未知角色过滤、停用/无角色拒绝、员工/管理探针矩阵、401 先于 403、缺失/过期/篡改/随机 Cookie、state 重放/过期、会话 TTL、OIDC ID Token 的 `exp`/签名/issuer/audience/nonce 校验、伪造身份头、停用与角色变更即时生效、统一错误信封、trace 一致、访问/错误日志与敏感字段、健康检查数据库故障、test 路由环境门控。
+测试覆盖：空库/已有库迁移重复执行、迁移数值排序/非法前缀/失败中止、种子幂等（含 `synced_at` 不变）、数据库约束、四种登录主体与双角色、未知角色过滤、停用/无角色拒绝、员工/管理探针矩阵、401 先于 403、缺失/过期/篡改/随机 Cookie、state 重放/过期、OIDC 授权错误回调、会话 TTL、OIDC ID Token 的 `exp`/签名/issuer/audience/nonce 校验、伪造身份头、停用与角色变更即时生效、统一错误信封、trace 一致、访问/错误日志与敏感字段、健康检查数据库故障、test 路由环境门控。
 
 数据库连接优先级：
 
