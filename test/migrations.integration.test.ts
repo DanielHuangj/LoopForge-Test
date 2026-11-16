@@ -36,7 +36,7 @@ describe('migrations and seed idempotency', () => {
           result.status === 'fulfilled',
       );
       const applied = fulfilled.flatMap((result) => result.value.applied);
-      expect(applied.sort()).toEqual(['001_identity', '002_login_attempt']);
+      expect(applied.sort()).toEqual(['001_identity', '002_login_attempt', '003_dish']);
 
       const versions = await tableRows<{ version: string; count: string }>(
         concurrentDatabase.url,
@@ -45,6 +45,7 @@ describe('migrations and seed idempotency', () => {
       expect(versions).toEqual([
         { version: '001_identity', count: '1' },
         { version: '002_login_attempt', count: '1' },
+        { version: '003_dish', count: '1' },
       ]);
     } finally {
       await concurrentDatabase.close();
@@ -53,12 +54,12 @@ describe('migrations and seed idempotency', () => {
 
   it('creates identity tables, applies versions once, and can repeat on empty and existing databases', async () => {
     const first = await runMigrations(database.url);
-    expect(first.applied).toEqual(['001_identity', '002_login_attempt']);
+    expect(first.applied).toEqual(['001_identity', '002_login_attempt', '003_dish']);
     expect(first.skipped).toEqual([]);
 
     const second = await runMigrations(database.url);
     expect(second.applied).toEqual([]);
-    expect(second.skipped).toEqual(['001_identity', '002_login_attempt']);
+    expect(second.skipped).toEqual(['001_identity', '002_login_attempt', '003_dish']);
 
     const tables = await tableRows<{ table_name: string }>(
       database.url,
@@ -67,6 +68,7 @@ describe('migrations and seed idempotency', () => {
     );
     expect(tables.map((row) => row.table_name)).toEqual([
       'app_user',
+      'dish',
       'login_attempt',
       'schema_migrations',
       'user_role',
@@ -79,6 +81,7 @@ describe('migrations and seed idempotency', () => {
     expect(versions).toEqual([
       { version: '001_identity', count: '1' },
       { version: '002_login_attempt', count: '1' },
+      { version: '003_dish', count: '1' },
     ]);
 
     await execute(
@@ -197,13 +200,14 @@ describe('migrations and seed idempotency', () => {
     await expect(runSeed(database.url, 'prod')).rejects.toThrow(/APP_ENV=dev or APP_ENV=test/);
   });
 
-  it('does not create dish, menu, order or image business tables', async () => {
+  it('creates the dish table but does not create downstream menu, order or image tables', async () => {
     const names = await tableRows<{ table_name: string }>(
       database.url,
       "SELECT table_name FROM information_schema.tables WHERE table_schema = current_schema()",
     );
     const tableNames = new Set(names.map((row) => row.table_name));
-    for (const forbidden of ['dish', 'daily_menu', 'daily_menu_item', 'orders', 'order_items', 'image']) {
+    expect(tableNames.has('dish')).toBe(true);
+    for (const forbidden of ['daily_menu', 'daily_menu_item', 'orders', 'order_items', 'image']) {
       expect(tableNames.has(forbidden)).toBe(false);
     }
   });

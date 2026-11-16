@@ -6,6 +6,7 @@ import Fastify, {
   type FastifyRequest,
 } from 'fastify';
 import cookie from '@fastify/cookie';
+import multipart from '@fastify/multipart';
 import type { Logger } from 'pino';
 import { AppError } from './errors.js';
 import type { AppConfig } from './config.js';
@@ -13,6 +14,7 @@ import { createLogger, createRedactor, type Redactor } from './logger.js';
 import type { AppServices } from './composition/container.js';
 import { registerTraceAndAccessLog } from './http/access-log.js';
 import { registerErrorHandler } from './http/error-handler.js';
+import { registerLosslessJsonParser } from './http/lossless-json.js';
 import {
   PROTECTED_PATHS,
   PUBLIC_PATHS,
@@ -23,6 +25,8 @@ import { registerAuthRoutes } from './http/routes/auth-routes.js';
 import { registerProbeRoutes } from './http/routes/probe-routes.js';
 import { registerHealthRoutes } from './http/routes/health-routes.js';
 import { registerTestRoutes } from './http/routes/test-routes.js';
+import { registerDishRoutes } from './http/routes/dish-routes.js';
+import { registerDishImageRoutes } from './http/routes/dish-image-routes.js';
 
 export interface BuildAppOptions extends AppServices {
   config: AppConfig;
@@ -31,10 +35,16 @@ export interface BuildAppOptions extends AppServices {
 }
 
 export async function buildApp(options: BuildAppOptions): Promise<FastifyInstance> {
-  const { config, auth, sessions, healthCheck } = options;
+  const { config, auth, sessions, healthCheck, dishes, dishImages, imageDecoder, close } = options;
   const redactor =
     options.redactor ??
-    createRedactor([config.databaseUrl, config.sso.clientSecret, config.sessionSecret]);
+    createRedactor([
+      config.databaseUrl,
+      config.sso.clientSecret,
+      config.sessionSecret,
+      config.objectStorage.accessKeyId,
+      config.objectStorage.secretAccessKey,
+    ]);
   const logger = options.logger ?? createLogger(config.logLevel);
 
   const app = Fastify({
@@ -45,6 +55,11 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   });
 
   await app.register(cookie);
+  await app.register(multipart, {
+    throwFileSizeLimit: true,
+    limits: { fileSize: 5_242_880, files: 1 },
+  });
+  registerLosslessJsonParser(app);
 
   registerTraceAndAccessLog(app, logger);
   registerErrorHandler(app, logger, redactor);
@@ -52,7 +67,13 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   registerHealthRoutes(app, healthCheck);
   registerAuthRoutes(app, config, auth, sessions);
   registerProbeRoutes(app, config, auth);
+  registerDishRoutes(app, config, auth, dishes);
+  registerDishImageRoutes(app, config, auth, dishImages, imageDecoder);
   if (config.appEnv === 'test') registerTestRoutes(app);
+
+  app.addHook('onClose', async () => {
+    await close();
+  });
 
   const authenticateForRouting = async (request: FastifyRequest): Promise<void> => {
     request.authUser = await auth.authenticate(request.cookies[config.sessionCookieName]);

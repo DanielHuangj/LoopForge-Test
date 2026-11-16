@@ -16,6 +16,7 @@ const config = loadConfig({
   SESSION_SECRET: '0123456789abcdef0123456789abcdef',
   MOCK_SSO_PORT: '9090',
   MOCK_SSO_ISSUER: 'http://localhost:9090',
+  OBJECT_STORAGE_DRIVER: 'memory',
 } as NodeJS.ProcessEnv);
 
 function claims(overrides: Record<string, unknown> = {}): Record<string, unknown> {

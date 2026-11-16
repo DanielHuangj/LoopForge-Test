@@ -15,8 +15,32 @@ export function registerErrorHandler(app: FastifyInstance, logger: Logger, redac
   app.setErrorHandler((error: FastifyError | AppError, request: FastifyRequest, reply: FastifyReply) => {
     let appError: AppError;
 
+    const imageUploadRoute =
+      request.method === 'PUT' && /^\/api\/v1\/admin\/dishes\/[^/]+\/image$/.test(request.url.split('?')[0] ?? '');
+    const parserCode = typeof error === 'object' && error !== null && 'code' in error ? String(error.code) : '';
+
     if (error instanceof AppError) {
       appError = error;
+    } else if (imageUploadRoute && (parserCode === 'FST_REQ_FILE_TOO_LARGE' || parserCode === 'FST_ERR_CTP_BODY_TOO_LARGE')) {
+      appError = new AppError('IMAGE_TOO_LARGE', {
+        message: '图片不能超过 5 MB',
+        details: [{ field: 'file', message: '图片不能超过 5 MB' }],
+      });
+    } else if (imageUploadRoute && (parserCode === 'FST_FILES_LIMIT' || parserCode === 'FST_PARTS_LIMIT')) {
+      appError = new AppError('INVALID_IMAGE', {
+        message: '文件数量必须为 1',
+        details: [{ field: 'file', message: '文件数量必须为 1' }],
+      });
+    } else if (
+      imageUploadRoute &&
+      (parserCode === 'FST_INVALID_MULTIPART_CONTENT_TYPE' ||
+        parserCode === 'FST_ERR_CTP_INVALID_MEDIA_TYPE' ||
+        parserCode === 'FST_ERR_CTP_EMPTY_JSON_BODY')
+    ) {
+      appError = new AppError('INVALID_IMAGE', {
+        message: '图片上传必须使用 multipart/form-data 且包含一个文件',
+        details: [{ field: 'file', message: '图片上传必须使用 multipart/form-data 且包含一个文件' }],
+      });
     } else if (error.validation) {
       appError = new AppError('VALIDATION_ERROR', { details: fastifyValidationDetails(error) });
     } else if (error.statusCode && error.statusCode >= 400 && error.statusCode < 500) {

@@ -24,7 +24,13 @@ async function main(): Promise<void> {
     throw error;
   }
 
-  const redactor = createRedactor([config.databaseUrl, config.sso.clientSecret, config.sessionSecret]);
+  const redactor = createRedactor([
+    config.databaseUrl,
+    config.sso.clientSecret,
+    config.sessionSecret,
+    config.objectStorage.accessKeyId,
+    config.objectStorage.secretAccessKey,
+  ]);
   const logger = createLogger(config.logLevel);
   const pool = createPool(config.databaseUrl, {
     connectionTimeoutMillis: config.healthDbTimeoutMs,

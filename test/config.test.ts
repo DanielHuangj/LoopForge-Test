@@ -10,6 +10,7 @@ const baseEnv = {
   SESSION_SECRET: '0123456789abcdef0123456789abcdef',
   MOCK_SSO_PORT: '9090',
   MOCK_SSO_ISSUER: 'http://localhost:9090',
+  OBJECT_STORAGE_DRIVER: 'memory',
 } satisfies NodeJS.ProcessEnv;
 
 describe('configuration', () => {
@@ -79,6 +80,13 @@ describe('configuration', () => {
       SSO_REDIRECT_URI: 'https://app.example.com/api/v1/auth/callback',
       SESSION_SECRET: '0123456789abcdef0123456789abcdef',
       POST_LOGIN_REDIRECT_URL: '/after-login',
+      OBJECT_STORAGE_DRIVER: 's3',
+      OBJECT_STORAGE_ENDPOINT: 'https://storage.example.com',
+      OBJECT_STORAGE_REGION: 'us-east-1',
+      OBJECT_STORAGE_BUCKET: 'loopforge-dish-images',
+      OBJECT_STORAGE_ACCESS_KEY_ID: 'test-access-key',
+      OBJECT_STORAGE_SECRET_ACCESS_KEY: 'test-secret-key',
+      OBJECT_STORAGE_FORCE_PATH_STYLE: 'false',
     } as NodeJS.ProcessEnv);
 
     expect(new SessionService(devConfig).sessionCookieOptions(100).secure).toBe(false);
@@ -137,5 +145,48 @@ describe('configuration', () => {
         expect.arrayContaining(['SSO_NAME_CLAIM', 'SSO_ROLES_CLAIM']),
       );
     }
+  });
+
+  it('requires explicit object storage configuration and reserves memory for tests', () => {
+    expect(() => loadConfig({ ...baseEnv, APP_ENV: 'dev' } as NodeJS.ProcessEnv)).toThrow(ConfigError);
+    expect(() => loadConfig({ ...baseEnv, APP_ENV: 'prod' } as NodeJS.ProcessEnv)).toThrow(ConfigError);
+
+    const missing = (() => {
+      try {
+        loadConfig({ ...baseEnv, OBJECT_STORAGE_DRIVER: 's3' } as NodeJS.ProcessEnv);
+      } catch (error) {
+        return error as ConfigError;
+      }
+      throw new Error('expected ConfigError');
+    })();
+    expect(missing.variableNames).toEqual(
+      expect.arrayContaining([
+        'OBJECT_STORAGE_ENDPOINT',
+        'OBJECT_STORAGE_REGION',
+        'OBJECT_STORAGE_BUCKET',
+        'OBJECT_STORAGE_ACCESS_KEY_ID',
+        'OBJECT_STORAGE_SECRET_ACCESS_KEY',
+        'OBJECT_STORAGE_FORCE_PATH_STYLE',
+      ]),
+    );
+    expect(missing.message).not.toContain('super-secret');
+
+    const s3 = loadConfig({
+      ...baseEnv,
+      OBJECT_STORAGE_DRIVER: 's3',
+      OBJECT_STORAGE_ENDPOINT: 'http://127.0.0.1:9000',
+      OBJECT_STORAGE_REGION: 'us-east-1',
+      OBJECT_STORAGE_BUCKET: 'loopforge-dish-images',
+      OBJECT_STORAGE_ACCESS_KEY_ID: 'local-access',
+      OBJECT_STORAGE_SECRET_ACCESS_KEY: 'super-secret',
+      OBJECT_STORAGE_FORCE_PATH_STYLE: 'true',
+    } as NodeJS.ProcessEnv);
+    expect(s3.objectStorage).toMatchObject({
+      driver: 's3',
+      endpoint: 'http://127.0.0.1:9000',
+      region: 'us-east-1',
+      bucket: 'loopforge-dish-images',
+      forcePathStyle: true,
+    });
   });
 });
