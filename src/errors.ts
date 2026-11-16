@@ -52,10 +52,16 @@ export class AppError extends Error {
   readonly code: ErrorCode;
   readonly details?: ErrorDetail[];
   readonly extra?: { status?: 'DOWN' };
+  readonly oidcErrorCode?: string;
 
   constructor(
     code: ErrorCode,
-    options: { message?: string; details?: ErrorDetail[]; extra?: { status?: 'DOWN' } } = {},
+    options: {
+      message?: string;
+      details?: ErrorDetail[];
+      extra?: { status?: 'DOWN' };
+      oidcErrorCode?: string;
+    } = {},
   ) {
     const message = options.message ?? DEFAULT_MESSAGES[code];
     super(message);
@@ -64,6 +70,7 @@ export class AppError extends Error {
     this.status = DEFAULT_STATUS[code];
     if (options.details) this.details = options.details;
     if (options.extra) this.extra = options.extra;
+    if (options.oidcErrorCode !== undefined) this.oidcErrorCode = options.oidcErrorCode;
   }
 }
 

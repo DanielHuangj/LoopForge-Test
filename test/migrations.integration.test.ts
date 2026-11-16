@@ -1,3 +1,6 @@
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type pg from 'pg';
 import { runMigrations } from '../src/db/migrate.js';
@@ -101,7 +104,42 @@ describe('migrations and seed idempotency', () => {
   it('keeps seed idempotent and enforces database constraints', async () => {
     await runMigrations(database.url);
     await runSeed(database.url, 'test');
+    const firstSnapshot = await tableRows<{
+      user_id: string;
+      employee_no: string;
+      name: string;
+      department: string;
+      account_status: string;
+      synced_at: string;
+      roles: string;
+    }>(
+      database.url,
+      `SELECT u.user_id, u.employee_no, u.name, u.department, u.account_status,
+              u.synced_at::text AS synced_at,
+              coalesce(string_agg(r.role, ',' ORDER BY r.role), '') AS roles
+         FROM app_user u LEFT JOIN user_role r ON r.user_id = u.user_id
+        WHERE u.user_id IN ('u-emp-001', 'u-admin-001', 'u-dual-001', 'u-disabled-001')
+        GROUP BY u.user_id ORDER BY u.user_id`,
+    );
     await runSeed(database.url, 'test');
+    const secondSnapshot = await tableRows<{
+      user_id: string;
+      employee_no: string;
+      name: string;
+      department: string;
+      account_status: string;
+      synced_at: string;
+      roles: string;
+    }>(
+      database.url,
+      `SELECT u.user_id, u.employee_no, u.name, u.department, u.account_status,
+              u.synced_at::text AS synced_at,
+              coalesce(string_agg(r.role, ',' ORDER BY r.role), '') AS roles
+         FROM app_user u LEFT JOIN user_role r ON r.user_id = u.user_id
+        WHERE u.user_id IN ('u-emp-001', 'u-admin-001', 'u-dual-001', 'u-disabled-001')
+        GROUP BY u.user_id ORDER BY u.user_id`,
+    );
+    expect(secondSnapshot).toEqual(firstSnapshot);
 
     const users = await tableRows<{ user_id: string; role_count: string }>(
       database.url,
@@ -168,5 +206,118 @@ describe('migrations and seed idempotency', () => {
     for (const forbidden of ['dish', 'daily_menu', 'daily_menu_item', 'orders', 'order_items', 'image']) {
       expect(tableNames.has(forbidden)).toBe(false);
     }
+  });
+
+  it('orders migrations by numeric version prefix and rejects invalid or duplicate prefixes', async () => {
+    const migrationsDir = await mkdtemp(path.join(tmpdir(), 'loopforge-migrations-'));
+    const numericOrderDatabase = await createTestDatabase();
+    const invalidDatabase = await createTestDatabase();
+    const duplicateDatabase = await createTestDatabase();
+    try {
+      await writeFile(path.join(migrationsDir, '010_tenth.sql'), "INSERT INTO migration_order (name) VALUES ('tenth');");
+      await writeFile(path.join(migrationsDir, '002_second.sql'), 'CREATE TABLE migration_order (name TEXT NOT NULL);');
+      const result = await runMigrations(numericOrderDatabase.url, migrationsDir);
+      expect(result.applied).toEqual(['002_second', '010_tenth']);
+      const markers = await tableRows<{ name: string }>(
+        numericOrderDatabase.url,
+        'SELECT name FROM migration_order',
+      );
+      expect(markers).toEqual([{ name: 'tenth' }]);
+
+      const invalidDir = await mkdtemp(path.join(tmpdir(), 'loopforge-invalid-migration-'));
+      try {
+        await writeFile(path.join(invalidDir, '001_valid.sql'), 'SELECT 1;');
+        await writeFile(path.join(invalidDir, '2_bad.sql'), 'SELECT 2;');
+        await expect(runMigrations(invalidDatabase.url, invalidDir)).rejects.toThrow(/invalid migration filename/);
+        const tables = await tableRows<{ table_name: string }>(
+          invalidDatabase.url,
+          "SELECT table_name FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'schema_migrations'",
+        );
+        expect(tables).toEqual([]);
+      } finally {
+        await rm(invalidDir, { recursive: true, force: true });
+      }
+
+      const duplicateDir = await mkdtemp(path.join(tmpdir(), 'loopforge-duplicate-migration-'));
+      try {
+        await writeFile(path.join(duplicateDir, '001_first.sql'), 'SELECT 1;');
+        await writeFile(path.join(duplicateDir, '001_second.sql'), 'SELECT 2;');
+        await expect(runMigrations(duplicateDatabase.url, duplicateDir)).rejects.toThrow(
+          /duplicate migration sequence 001/,
+        );
+      } finally {
+        await rm(duplicateDir, { recursive: true, force: true });
+      }
+    } finally {
+      await rm(migrationsDir, { recursive: true, force: true });
+      await numericOrderDatabase.close();
+      await invalidDatabase.close();
+      await duplicateDatabase.close();
+    }
+  });
+
+  it('rolls back the failed migration, stops later versions, and releases the advisory lock', async () => {
+    const migrationsDir = await mkdtemp(path.join(tmpdir(), 'loopforge-failing-migration-'));
+    const failingDatabase = await createTestDatabase();
+    try {
+      await writeFile(path.join(migrationsDir, '001_ok.sql'), 'CREATE TABLE migration_first (id integer);');
+      await writeFile(path.join(migrationsDir, '002_fail.sql'), 'CREATE TABLE broken (;');
+      await writeFile(path.join(migrationsDir, '003_later.sql'), 'CREATE TABLE migration_later (id integer);');
+
+      await expect(runMigrations(failingDatabase.url, migrationsDir)).rejects.toBeInstanceOf(Error);
+
+      const versions = await tableRows<{ version: string }>(
+        failingDatabase.url,
+        'SELECT version FROM schema_migrations ORDER BY version',
+      );
+      expect(versions).toEqual([{ version: '001_ok' }]);
+
+      const tables = await tableRows<{ table_name: string }>(
+        failingDatabase.url,
+        `SELECT table_name FROM information_schema.tables
+          WHERE table_schema = current_schema() AND table_name IN ('migration_first', 'migration_later')
+          ORDER BY table_name`,
+      );
+      expect(tables).toEqual([{ table_name: 'migration_first' }]);
+
+      const lock = await tableRows<{ locked: boolean }>(
+        failingDatabase.url,
+        'SELECT pg_try_advisory_lock(8102, 1) AS locked',
+      );
+      expect(lock).toEqual([{ locked: true }]);
+      await execute(failingDatabase.url, 'SELECT pg_advisory_unlock(8102, 1)');
+    } finally {
+      await rm(migrationsDir, { recursive: true, force: true });
+      await failingDatabase.close();
+    }
+  });
+
+  it('refreshes synced_at when only the role set changes', async () => {
+    await runMigrations(database.url);
+    await runSeed(database.url, 'test');
+    await execute(
+      database.url,
+      "DELETE FROM user_role WHERE user_id = 'u-dual-001' AND role = 'MENU_ADMIN'",
+    );
+    await execute(
+      database.url,
+      "UPDATE app_user SET synced_at = '2000-01-01T00:00:00Z' WHERE user_id = 'u-dual-001'",
+    );
+
+    await runSeed(database.url, 'test');
+
+    const rows = await tableRows<{ synced_at: string; roles: string }>(
+      database.url,
+      `SELECT u.synced_at::text AS synced_at,
+              coalesce(string_agg(r.role, ',' ORDER BY r.role), '') AS roles
+         FROM app_user u LEFT JOIN user_role r ON r.user_id = u.user_id
+        WHERE u.user_id = 'u-dual-001'
+        GROUP BY u.user_id`,
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.roles).toBe('EMPLOYEE,MENU_ADMIN');
+    expect(new Date(rows[0]!.synced_at).getTime()).toBeGreaterThan(
+      new Date('2000-01-02T00:00:00Z').getTime(),
+    );
   });
 });

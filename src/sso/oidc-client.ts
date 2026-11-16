@@ -33,7 +33,16 @@ export class OidcClient implements SsoProvider {
           signal: AbortSignal.timeout(5000),
         });
         if (!response.ok) throw new Error(`discovery returned ${response.status}`);
-        return (await response.json()) as DiscoveryDocument;
+        const document = (await response.json()) as Partial<DiscoveryDocument>;
+        if (
+          typeof document.issuer !== 'string' ||
+          typeof document.authorization_endpoint !== 'string' ||
+          typeof document.token_endpoint !== 'string' ||
+          typeof document.jwks_uri !== 'string'
+        ) {
+          throw new Error('discovery document is malformed');
+        }
+        return document as DiscoveryDocument;
       })().catch(() => {
         this.discoveryPromise = null;
         throw new AppError('LOGIN_FAILED');
@@ -44,7 +53,15 @@ export class OidcClient implements SsoProvider {
 
   async authorizationUrl(request: AuthorizationRequest): Promise<string> {
     const discovery = await this.discover();
-    const url = new URL(discovery.authorization_endpoint);
+    let url: URL;
+    try {
+      url = new URL(discovery.authorization_endpoint);
+    } catch {
+      throw new AppError('LOGIN_FAILED');
+    }
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      throw new AppError('LOGIN_FAILED');
+    }
     url.searchParams.set('response_type', 'code');
     url.searchParams.set('client_id', this.config.sso.clientId);
     url.searchParams.set('redirect_uri', this.config.sso.redirectUri);

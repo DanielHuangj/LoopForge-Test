@@ -87,11 +87,14 @@ function absoluteHttpUrl(value: string): URL | null {
 }
 
 function validRedirectUrl(value: string): boolean {
-  if (value.startsWith('/') && !value.startsWith('//')) {
-    return !value.includes('#');
+  if (value.length < 1 || value.length > 2048) return false;
+  if (!value.startsWith('/') || value.startsWith('//')) return false;
+  if (value.includes('\\') || value.includes('#') || /[\u0000-\u001f\u007f-\u009f]/.test(value)) return false;
+  try {
+    return new URL(value, 'http://placeholder.invalid').origin === 'http://placeholder.invalid';
+  } catch {
+    return false;
   }
-  const url = absoluteHttpUrl(value);
-  return Boolean(url && !url.username && !url.password && !url.hash);
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
@@ -126,7 +129,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const sessionCookieName = env.SESSION_COOKIE_NAME?.trim() || 'loopforge_session';
   if (!COOKIE_NAME.test(sessionCookieName)) invalid.push('SESSION_COOKIE_NAME');
 
-  const postLoginRedirectUrl = env.POST_LOGIN_REDIRECT_URL?.trim() || '/api/v1/auth/me';
+  const rawPostLoginRedirectUrl = env.POST_LOGIN_REDIRECT_URL;
+  const postLoginRedirectUrl =
+    rawPostLoginRedirectUrl === undefined || rawPostLoginRedirectUrl === ''
+      ? '/api/v1/auth/me'
+      : rawPostLoginRedirectUrl;
   if (!validRedirectUrl(postLoginRedirectUrl)) invalid.push('POST_LOGIN_REDIRECT_URL');
 
   const logLevelRaw = env.LOG_LEVEL?.trim() || 'info';
@@ -182,8 +189,22 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     employeeNo: env.SSO_EMPLOYEE_NO_CLAIM?.trim() || 'employee_no',
     department: env.SSO_DEPARTMENT_CLAIM?.trim() || 'department',
   };
-  for (const [key, value] of Object.entries(claimEnv)) {
-    if (!CLAIM_NAME.test(value)) invalid.push(`SSO_${key.replace(/([A-Z])/g, '_$1').toUpperCase()}_CLAIM`);
+  const claimVariableNames: Record<keyof typeof claimEnv, string> = {
+    name: 'SSO_NAME_CLAIM',
+    roles: 'SSO_ROLES_CLAIM',
+    accountStatus: 'SSO_ACCOUNT_STATUS_CLAIM',
+    employeeNo: 'SSO_EMPLOYEE_NO_CLAIM',
+    department: 'SSO_DEPARTMENT_CLAIM',
+  };
+  for (const [key, value] of Object.entries(claimEnv) as Array<[keyof typeof claimEnv, string]>) {
+    if (!CLAIM_NAME.test(value)) invalid.push(claimVariableNames[key]);
+  }
+  const claimCounts = new Map<string, number>();
+  for (const value of Object.values(claimEnv)) {
+    claimCounts.set(value, (claimCounts.get(value) ?? 0) + 1);
+  }
+  for (const [key, value] of Object.entries(claimEnv) as Array<[keyof typeof claimEnv, string]>) {
+    if ((claimCounts.get(value) ?? 0) > 1) invalid.push(claimVariableNames[key]);
   }
 
   if (missing.length > 0 || invalid.length > 0) {

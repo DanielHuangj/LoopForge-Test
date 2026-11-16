@@ -48,20 +48,30 @@ export function registerAuthRoutes(
     const query = request.query as Record<string, unknown>;
     const code = queryValue(query.code);
     const state = queryValue(query.state);
+    const oidcError = queryValue(query.error);
+    const errorDescription = queryValue(query.error_description);
 
     const details: Array<{ field: string; message: string }> = [];
-    if (!code || code.trim() === '') details.push({ field: 'code', message: '必填' });
     if (!state || state.trim() === '') details.push({ field: 'state', message: '必填' });
-    if (code && code.length > 4096) details.push({ field: 'code', message: '长度超过限制' });
     if (state && state.length > 512) details.push({ field: 'state', message: '长度超过限制' });
-    if (details.length > 0 || !code || !state) {
+    if (oidcError !== undefined) {
+      if (oidcError.length > 128) details.push({ field: 'error', message: '长度超过限制' });
+      if (errorDescription !== undefined && errorDescription.length > 2048) {
+        details.push({ field: 'error_description', message: '长度超过限制' });
+      }
+    } else {
+      if (!code || code.trim() === '') details.push({ field: 'code', message: '必填' });
+      if (code && code.length > 4096) details.push({ field: 'code', message: '长度超过限制' });
+    }
+    if (details.length > 0) {
       throw new AppError('VALIDATION_ERROR', { details });
     }
 
     const completion = await auth.completeCallback({
       code,
-      state,
+      state: state!,
       stateCookie: request.cookies[STATE_COOKIE_NAME],
+      oidcError,
     });
     reply.setCookie(
       config.sessionCookieName,
