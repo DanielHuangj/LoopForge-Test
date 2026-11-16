@@ -13,11 +13,56 @@ services:
       timeout: 3s
       retries: 20
 
+  minio:
+    image: minio/minio:latest
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER must be set in .env}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set in .env}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9000/minio/health/live >/dev/null"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER must be set in .env}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set in .env}
+      OBJECT_STORAGE_BUCKET: ${OBJECT_STORAGE_BUCKET:-loopforge-dish-images}
+      OBJECT_STORAGE_ACCESS_KEY_ID: ${OBJECT_STORAGE_ACCESS_KEY_ID:?OBJECT_STORAGE_ACCESS_KEY_ID must be set in .env}
+      OBJECT_STORAGE_SECRET_ACCESS_KEY: ${OBJECT_STORAGE_SECRET_ACCESS_KEY:?OBJECT_STORAGE_SECRET_ACCESS_KEY must be set in .env}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"
+        mc mb --ignore-existing "local/$$OBJECT_STORAGE_BUCKET"
+        mc anonymous set none "local/$$OBJECT_STORAGE_BUCKET"
+        printf '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:PutObject","s3:GetObject","s3:DeleteObject"],"Resource":["arn:aws:s3:::%s/dish-images/*"]}]}' "$$OBJECT_STORAGE_BUCKET" > /tmp/dish-images-policy.json
+        mc admin policy create local dish-images-rw /tmp/dish-images-policy.json >/dev/null 2>&1 || true
+        mc admin user add local "$$OBJECT_STORAGE_ACCESS_KEY_ID" "$$OBJECT_STORAGE_SECRET_ACCESS_KEY" >/dev/null 2>&1 || true
+        mc admin policy attach local dish-images-rw --user "$$OBJECT_STORAGE_ACCESS_KEY_ID" >/dev/null 2>&1 || true
+        mc anonymous get "local/$$OBJECT_STORAGE_BUCKET"
+
   app:
     build: .
     depends_on:
       db:
         condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
     environment:
       APP_ENV: dev
       PORT: "8080"
@@ -28,6 +73,13 @@ services:
       MOCK_SSO_PORT: "9090"
       MOCK_SSO_HOST: 0.0.0.0
       MOCK_SSO_ISSUER: http://localhost:9090
+      OBJECT_STORAGE_DRIVER: s3
+      OBJECT_STORAGE_ENDPOINT: http://minio:9000
+      OBJECT_STORAGE_REGION: ${OBJECT_STORAGE_REGION:-us-east-1}
+      OBJECT_STORAGE_BUCKET: ${OBJECT_STORAGE_BUCKET:-loopforge-dish-images}
+      OBJECT_STORAGE_ACCESS_KEY_ID: ${OBJECT_STORAGE_ACCESS_KEY_ID:?OBJECT_STORAGE_ACCESS_KEY_ID must be set in .env}
+      OBJECT_STORAGE_SECRET_ACCESS_KEY: ${OBJECT_STORAGE_SECRET_ACCESS_KEY:?OBJECT_STORAGE_SECRET_ACCESS_KEY must be set in .env}
+      OBJECT_STORAGE_FORCE_PATH_STYLE: "true"
     ports:
       - "8080:8080"
       - "9090:9090"
@@ -37,3 +89,6 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+
+volumes:
+  minio-data:

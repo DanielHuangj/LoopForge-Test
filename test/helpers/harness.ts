@@ -9,6 +9,9 @@ import { runSeed, SEED_IDENTITIES } from '../../src/db/seed.js';
 import { createLogger, createRedactor } from '../../src/logger.js';
 import { createMockIdp, type MockIdp } from '../../src/sso/mock-idp.js';
 import { createAppServices } from '../../src/composition/container.js';
+import type { DishVisibilityStore } from '../../src/ports/dish-visibility-store.js';
+import type { ImageDecoder } from '../../src/ports/image-decoder.js';
+import type { ImageObjectStore } from '../../src/ports/image-object-store.js';
 import { getFreePort } from './database.js';
 
 export class MemoryLogStream extends Writable {
@@ -72,6 +75,7 @@ export async function createIdentityEnvironment() {
       const seedIds = SEED_IDENTITIES.map((identity) => identity.userId);
       const placeholders = seedIds.map((_, index) => `$${index + 1}`).join(',');
       await db.execute(database.url, 'DELETE FROM login_attempt');
+      await db.execute(database.url, 'DELETE FROM dish');
       await db.execute(database.url, `DELETE FROM user_role WHERE user_id NOT IN (${placeholders})`, seedIds);
       await db.execute(database.url, `DELETE FROM app_user WHERE user_id NOT IN (${placeholders})`, seedIds);
       await runSeed(database.url, 'test');
@@ -99,9 +103,23 @@ export async function buildTestApp(input: {
   sessionTtlSeconds?: number;
   captureLogs?: boolean;
   databaseUrlOverride?: string;
+  dishVisibility?: DishVisibilityStore;
+  imageDecoder?: ImageDecoder;
+  imageObjectStore?: ImageObjectStore;
 }): Promise<BuiltApp> {
   const appPort = await getFreePort();
   const appEnv = input.appEnv ?? 'test';
+  const objectStorageEnv = appEnv === 'test'
+    ? { OBJECT_STORAGE_DRIVER: 'memory' }
+    : {
+        OBJECT_STORAGE_DRIVER: 's3',
+        OBJECT_STORAGE_ENDPOINT: 'http://127.0.0.1:9000',
+        OBJECT_STORAGE_REGION: 'us-east-1',
+        OBJECT_STORAGE_BUCKET: 'loopforge-dish-images',
+        OBJECT_STORAGE_ACCESS_KEY_ID: 'test-access-key',
+        OBJECT_STORAGE_SECRET_ACCESS_KEY: 'test-secret-key',
+        OBJECT_STORAGE_FORCE_PATH_STYLE: 'true',
+      };
   const config = loadConfig({
     APP_ENV: appEnv,
     PORT: String(appPort),
@@ -112,6 +130,7 @@ export async function buildTestApp(input: {
     LOG_LEVEL: 'info',
     MOCK_SSO_PORT: String(input.mockPort),
     MOCK_SSO_ISSUER: input.mockIssuer,
+    ...objectStorageEnv,
   } as NodeJS.ProcessEnv);
 
   const logs = new MemoryLogStream();
@@ -121,8 +140,20 @@ export async function buildTestApp(input: {
     statementTimeoutMs: config.healthDbTimeoutMs,
     queryTimeoutMs: config.healthDbTimeoutMs,
   });
-  const redactor = createRedactor([config.databaseUrl, config.sso.clientSecret, config.sessionSecret]);
-  const services = createAppServices({ config, pool });
+  const redactor = createRedactor([
+    config.databaseUrl,
+    config.sso.clientSecret,
+    config.sessionSecret,
+    config.objectStorage.accessKeyId,
+    config.objectStorage.secretAccessKey,
+  ]);
+  const services = createAppServices({
+    config,
+    pool,
+    dishVisibility: input.dishVisibility,
+    imageDecoder: input.imageDecoder,
+    imageObjectStore: input.imageObjectStore,
+  });
   const app = await buildApp({ config, ...services, logger, redactor });
   return {
     app,

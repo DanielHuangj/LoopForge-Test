@@ -35,6 +35,13 @@ async function startServer(databaseUrl: string): Promise<ServerProcess> {
       MOCK_SSO_ISSUER: `http://127.0.0.1:${mockPort}`,
       HEALTH_DB_TIMEOUT_MS: '2000',
       LOG_LEVEL: 'warn',
+      OBJECT_STORAGE_DRIVER: 's3',
+      OBJECT_STORAGE_ENDPOINT: 'http://127.0.0.1:9000',
+      OBJECT_STORAGE_REGION: 'us-east-1',
+      OBJECT_STORAGE_BUCKET: 'loopforge-dish-images',
+      OBJECT_STORAGE_ACCESS_KEY_ID: 'test-access-key',
+      OBJECT_STORAGE_SECRET_ACCESS_KEY: 'test-secret-key',
+      OBJECT_STORAGE_FORCE_PATH_STYLE: 'true',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });

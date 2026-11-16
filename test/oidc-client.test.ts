@@ -91,6 +91,7 @@ describe('OIDC ID token verification', () => {
       SSO_CLIENT_SECRET: 'oidc-client-secret',
       SSO_REDIRECT_URI: 'http://127.0.0.1:8080/api/v1/auth/callback',
       SESSION_SECRET: 'test-session-secret-0123456789abcdef0123456789abcdef',
+      OBJECT_STORAGE_DRIVER: 'memory',
     } as NodeJS.ProcessEnv);
     client = new OidcClient(config);
   });
@@ -157,6 +158,7 @@ describe('OIDC discovery validation', () => {
       SSO_CLIENT_SECRET: 'oidc-client-secret',
       SSO_REDIRECT_URI: 'http://127.0.0.1:8080/api/v1/auth/callback',
       SESSION_SECRET: 'test-session-secret-0123456789abcdef0123456789abcdef',
+      OBJECT_STORAGE_DRIVER: 'memory',
     } as NodeJS.ProcessEnv);
     const client = new OidcClient(config);
 

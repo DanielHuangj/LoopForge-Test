@@ -1,6 +1,17 @@
 export type AppEnv = 'dev' | 'test' | 'prod';
 export type SsoMode = 'oidc' | 'mock';
 export type LogLevel = 'error' | 'warn' | 'info' | 'debug';
+export type ObjectStorageDriver = 's3' | 'memory';
+
+export interface ObjectStorageConfig {
+  driver: ObjectStorageDriver;
+  endpoint?: string;
+  region?: string;
+  bucket?: string;
+  accessKeyId?: string;
+  secretAccessKey?: string;
+  forcePathStyle?: boolean;
+}
 
 export interface AppConfig {
   appEnv: AppEnv;
@@ -16,6 +27,7 @@ export interface AppConfig {
   mockSsoPort: number;
   mockSsoHost: string;
   mockSsoIssuer: string;
+  objectStorage: ObjectStorageConfig;
   sso: {
     issuer: string;
     clientId: string;
@@ -41,6 +53,7 @@ export class ConfigError extends Error {
 
 const APP_ENVS = new Set(['dev', 'test', 'prod']);
 const SSO_MODES = new Set(['oidc', 'mock']);
+const OBJECT_STORAGE_DRIVERS = new Set(['s3', 'memory']);
 const LOG_LEVELS = new Set(['error', 'warn', 'info', 'debug']);
 const CLAIM_NAME = /^[A-Za-z0-9_.-]{1,64}$/;
 const COOKIE_NAME = /^[A-Za-z0-9_-]{1,64}$/;
@@ -105,12 +118,19 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const ssoModeRaw = required(env, 'SSO_MODE', missing);
   const databaseUrl = required(env, 'DATABASE_URL', missing);
   const sessionSecret = required(env, 'SESSION_SECRET', missing);
+  const objectStorageDriverRaw = required(env, 'OBJECT_STORAGE_DRIVER', missing);
 
   const appEnv = APP_ENVS.has(appEnvRaw) ? (appEnvRaw as AppEnv) : null;
   if (appEnvRaw && !appEnv) invalid.push('APP_ENV');
 
   const ssoMode = SSO_MODES.has(ssoModeRaw) ? (ssoModeRaw as SsoMode) : null;
   if (ssoModeRaw && !ssoMode) invalid.push('SSO_MODE');
+
+  const objectStorageDriver = OBJECT_STORAGE_DRIVERS.has(objectStorageDriverRaw)
+    ? (objectStorageDriverRaw as ObjectStorageDriver)
+    : null;
+  if (objectStorageDriverRaw && !objectStorageDriver) invalid.push('OBJECT_STORAGE_DRIVER');
+  if (objectStorageDriver === 'memory' && appEnv !== 'test') invalid.push('OBJECT_STORAGE_DRIVER');
 
   if (databaseUrl && !/^postgres(ql)?:\/\//.test(databaseUrl)) invalid.push('DATABASE_URL');
   if (sessionSecret && Buffer.byteLength(sessionSecret, 'utf8') < 32) invalid.push('SESSION_SECRET');
@@ -207,6 +227,44 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     if ((claimCounts.get(value) ?? 0) > 1) invalid.push(claimVariableNames[key]);
   }
 
+  let objectStorage: ObjectStorageConfig = { driver: objectStorageDriver ?? 's3' };
+  if (objectStorageDriver === 's3') {
+    const endpoint = required(env, 'OBJECT_STORAGE_ENDPOINT', missing);
+    const region = required(env, 'OBJECT_STORAGE_REGION', missing);
+    const bucket = required(env, 'OBJECT_STORAGE_BUCKET', missing);
+    const accessKeyId = required(env, 'OBJECT_STORAGE_ACCESS_KEY_ID', missing);
+    const secretAccessKey = required(env, 'OBJECT_STORAGE_SECRET_ACCESS_KEY', missing);
+    const forcePathStyleRaw = required(env, 'OBJECT_STORAGE_FORCE_PATH_STYLE', missing);
+
+    const endpointUrl = endpoint ? absoluteHttpUrl(endpoint) : null;
+    if (endpoint && (!endpointUrl || endpointUrl.search || endpointUrl.hash)) {
+      invalid.push('OBJECT_STORAGE_ENDPOINT');
+    }
+    if (region && !/^[a-z0-9-]{1,64}$/.test(region)) invalid.push('OBJECT_STORAGE_REGION');
+    if (bucket && !/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(bucket)) {
+      invalid.push('OBJECT_STORAGE_BUCKET');
+    }
+    if (accessKeyId && (accessKeyId.length < 1 || accessKeyId.length > 128)) {
+      invalid.push('OBJECT_STORAGE_ACCESS_KEY_ID');
+    }
+    if (secretAccessKey && (secretAccessKey.length < 1 || secretAccessKey.length > 256)) {
+      invalid.push('OBJECT_STORAGE_SECRET_ACCESS_KEY');
+    }
+    if (forcePathStyleRaw && forcePathStyleRaw !== 'true' && forcePathStyleRaw !== 'false') {
+      invalid.push('OBJECT_STORAGE_FORCE_PATH_STYLE');
+    }
+
+    objectStorage = {
+      driver: 's3',
+      endpoint,
+      region,
+      bucket,
+      accessKeyId,
+      secretAccessKey,
+      forcePathStyle: forcePathStyleRaw === 'true',
+    };
+  }
+
   if (missing.length > 0 || invalid.length > 0) {
     const unique = [...new Set([...missing, ...invalid])];
     throw new ConfigError(unique, `invalid or missing configuration variables: ${unique.join(', ')}`);
@@ -226,6 +284,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     mockSsoPort,
     mockSsoHost,
     mockSsoIssuer,
+    objectStorage,
     sso: { issuer, clientId, clientSecret, redirectUri },
     claims: claimEnv,
   };
